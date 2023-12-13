@@ -9,48 +9,42 @@ param environmentName string
 @description('Primary location for all resources')
 param location string
 
+@description('Enable private network access to the backend service')
+param isPrivateNetworkEnabled bool
+
+param principalType string = ''
+
 param appServicePlanName string = ''
 param backendServiceName string = ''
 param resourceGroupName string = ''
 
-param applicationInsightsDashboardName string = ''
 param applicationInsightsName string = ''
-param logAnalyticsName string = ''
+param workspaceName string = ''
 
 param searchServiceName string = ''
 param searchServiceResourceGroupName string = ''
-param searchServiceLocation string = ''
-// The free tier does not support managed identity (required) or semantic search (optional)
-@allowed(['basic', 'standard', 'standard2', 'standard3', 'storage_optimized_l1', 'storage_optimized_l2'])
-param searchServiceSkuName string // Set in main.parameters.json
-param searchIndexName string // Set in main.parameters.json
-param searchQueryLanguage string // Set in main.parameters.json
-param searchQuerySpeller string // Set in main.parameters.json
+param searchServiceResourceGroupLocation string = location
+
+param searchServiceSkuName string = 'standard'
+param searchIndexName string = 'gptkbindex'
 
 param storageAccountName string = ''
 param storageResourceGroupName string = ''
 param storageResourceGroupLocation string = location
 param storageContainerName string = 'content'
-param storageSkuName string // Set in main.parameters.json
-
-@allowed(['azure', 'openai'])
-param openAiHost string // Set in main.parameters.json
 
 param openAiServiceName string = ''
 param openAiResourceGroupName string = ''
-@description('Location for the OpenAI resource group')
-@allowed(['canadaeast', 'eastus', 'eastus2', 'francecentral', 'switzerlandnorth', 'uksouth', 'japaneast', 'northcentralus', 'australiaeast', 'swedencentral'])
-@metadata({
-  azd: {
-    type: 'location'
-  }
-})
-param openAiResourceGroupLocation string
+param openAiResourceGroupLocation string = location
 
 param openAiSkuName string = 'S0'
 
-param openAiApiKey string = ''
-param openAiApiOrganization string = ''
+param openAiGpt35TurboDeploymentName string = 'gpt-35-turbo-deploy'
+param openAiGpt35Turbo16kDeploymentName string = 'gpt-35-turbo-16k-deploy'
+param openAiGpt4DeploymentName string = ''
+param openAiGpt432kDeploymentName string = ''
+param openAiApiVersion string = '2023-05-15'
+
 
 param formRecognizerServiceName string = ''
 param formRecognizerResourceGroupName string = ''
@@ -58,29 +52,30 @@ param formRecognizerResourceGroupLocation string = location
 
 param formRecognizerSkuName string = 'S0'
 
-param chatGptDeploymentName string // Set in main.parameters.json
-param chatGptDeploymentCapacity int = 30
-param chatGptModelName string = (openAiHost == 'azure') ? 'gpt-35-turbo' : 'gpt-3.5-turbo'
-param chatGptModelVersion string = '0613'
-param embeddingDeploymentName string // Set in main.parameters.json
-param embeddingDeploymentCapacity int = 30
-param embeddingModelName string = 'text-embedding-ada-002'
+param cosmosDbDatabaseName string = 'ChatHistory'
+param cosmosDbContainerName string = 'Prompts'
 
-// Used for the optional login and document level access control system
-param useAuthentication bool = false
-param serverAppId string = ''
+
+
+param vnetLocation string = location
+param vnetAddressPrefix string = '10.0.0.0/16'
+
+param subnetAddressPrefix1 string = '10.0.0.0/24'
+param subnetAddressPrefix2 string = '10.0.1.0/24'
+param subnetAddressPrefix3 string = '10.0.2.0/24'
+
+param privateEndpointLocation string = location
+
+param vmLoginName string = 'azureuser'
 @secure()
-param serverAppSecret string = ''
-param clientAppId string = ''
+param vmLoginPassword string
 
-// Used for optional CORS support for alternate frontends
-param allowedOrigin string = '' // should start with https://, shouldn't end with a /
 
 @description('Id of the user or app to assign application roles')
 param principalId string = ''
 
 @description('Use Application Insights for monitoring and performance tracing')
-param useApplicationInsights bool = false
+param useApplicationInsights bool = true
 
 var abbrs = loadJsonContent('abbreviations.json')
 var resourceToken = toLower(uniqueString(subscription().id, environmentName, location))
@@ -109,29 +104,18 @@ resource storageResourceGroup 'Microsoft.Resources/resourceGroups@2021-04-01' ex
   name: !empty(storageResourceGroupName) ? storageResourceGroupName : resourceGroup.name
 }
 
-// Monitor application with Azure Monitor
-module monitoring 'core/monitor/monitoring.bicep' = if (useApplicationInsights) {
-  name: 'monitoring'
+module cosmosDb 'core/db/cosmosdb.bicep' = {
+  name: 'cosmosdb'
   scope: resourceGroup
   params: {
+    name: '${abbrs.documentDBDatabaseAccounts}${resourceToken}'
     location: location
-    tags: tags
-    applicationInsightsName: !empty(applicationInsightsName) ? applicationInsightsName : '${abbrs.insightsComponents}${resourceToken}'
-    logAnalyticsName: !empty(logAnalyticsName) ? logAnalyticsName : '${abbrs.operationalInsightsWorkspaces}${resourceToken}'
+    tags: union(tags, { 'azd-service-name': 'cosmosdb' })
+    cosmosDbDatabaseName: cosmosDbDatabaseName
+    cosmosDbContainerName: cosmosDbContainerName
+    publicNetworkAccess: isPrivateNetworkEnabled ? 'Disabled' : 'Enabled'
   }
 }
-
-
-module applicationInsightsDashboard 'backend-dashboard.bicep' = if (useApplicationInsights) {
-  name: 'application-insights-dashboard'
-  scope: resourceGroup
-  params: {
-    name: !empty(applicationInsightsDashboardName) ? applicationInsightsDashboardName : '${abbrs.portalDashboards}${resourceToken}'
-    location: location
-    applicationInsightsName: monitoring.outputs.applicationInsightsName
-  }
-}
-
 
 // Create an App Service Plan to group applications under the same payment plan and SKU
 module appServicePlan 'core/host/appserviceplan.bicep' = {
@@ -142,10 +126,22 @@ module appServicePlan 'core/host/appserviceplan.bicep' = {
     location: location
     tags: tags
     sku: {
-      name: 'B1'
+      name: 'S1'
       capacity: 1
     }
     kind: 'linux'
+  }
+}
+
+// Monitor application with Azure Monitor
+module monitoring './core/monitor/monitoring.bicep' = if (useApplicationInsights) {
+  name: 'monitoring'
+  scope: resourceGroup
+  params: {
+    workspaceName: !empty(workspaceName) ? workspaceName : '${abbrs.insightsComponents}${resourceToken}-workspace'
+    location: location
+    tags: tags
+    applicationInsightsName: !empty(applicationInsightsName) ? applicationInsightsName : '${abbrs.insightsComponents}${resourceToken}'
   }
 }
 
@@ -159,43 +155,31 @@ module backend 'core/host/appservice.bicep' = {
     tags: union(tags, { 'azd-service-name': 'backend' })
     appServicePlanId: appServicePlan.outputs.id
     runtimeName: 'python'
-    runtimeVersion: '3.11'
-    appCommandLine: 'python3 -m gunicorn main:app'
+    runtimeVersion: '3.10'
     scmDoBuildDuringDeployment: true
     managedIdentity: true
-    allowedOrigins: [allowedOrigin]
+    applicationInsightsName: useApplicationInsights ? monitoring.outputs.applicationInsightsName : ''
+    virtualNetworkSubnetId: isPrivateNetworkEnabled ? appServiceSubnet.outputs.id : ''
     appSettings: {
+      APPLICATIONINSIGHTS_CONNECTION_STRING: useApplicationInsights ? monitoring.outputs.applicationInsightsConnectionString : ''
       AZURE_STORAGE_ACCOUNT: storage.outputs.name
       AZURE_STORAGE_CONTAINER: storageContainerName
+      AZURE_OPENAI_SERVICE: openAi.outputs.name
       AZURE_SEARCH_INDEX: searchIndexName
       AZURE_SEARCH_SERVICE: searchService.outputs.name
-      AZURE_SEARCH_QUERY_LANGUAGE: searchQueryLanguage
-      AZURE_SEARCH_QUERY_SPELLER: searchQuerySpeller
-      APPLICATIONINSIGHTS_CONNECTION_STRING: useApplicationInsights ? monitoring.outputs.applicationInsightsConnectionString : ''
-      // Shared by all OpenAI deployments
-      OPENAI_HOST: openAiHost
-      AZURE_OPENAI_EMB_MODEL_NAME: embeddingModelName
-      AZURE_OPENAI_CHATGPT_MODEL: chatGptModelName
-      // Specific to Azure OpenAI
-      AZURE_OPENAI_SERVICE: openAiHost == 'azure' ? openAi.outputs.name : ''
-      AZURE_OPENAI_CHATGPT_DEPLOYMENT: chatGptDeploymentName
-      AZURE_OPENAI_EMB_DEPLOYMENT: embeddingDeploymentName
-      // Used only with non-Azure OpenAI deployments
-      OPENAI_API_KEY: openAiApiKey
-      OPENAI_ORGANIZATION: openAiApiOrganization
-      // Optional login and document level access control system
-      AZURE_USE_AUTHENTICATION: useAuthentication
-      AZURE_SERVER_APP_ID: serverAppId
-      AZURE_SERVER_APP_SECRET: serverAppSecret
-      AZURE_CLIENT_APP_ID: clientAppId
-      AZURE_TENANT_ID: tenant().tenantId
-      // CORS support, for frontends on other hosts
-      ALLOWED_ORIGIN: allowedOrigin
+      AZURE_OPENAI_GPT_35_TURBO_DEPLOYMENT: openAiGpt35TurboDeploymentName
+      AZURE_OPENAI_GPT_35_TURBO_16K_DEPLOYMENT: openAiGpt35Turbo16kDeploymentName
+      AZURE_OPENAI_GPT_4_DEPLOYMENT: ''
+      AZURE_OPENAI_GPT_4_32K_DEPLOYMENT: ''
+      AZURE_OPENAI_API_VERSION: '2023-05-15'
+      AZURE_COSMOSDB_CONTAINER: cosmosDbContainerName
+      AZURE_COSMOSDB_DATABASE: cosmosDbDatabaseName
+      AZURE_COSMOSDB_ENDPOINT: cosmosDb.outputs.endpoint
     }
   }
 }
 
-module openAi 'core/ai/cognitiveservices.bicep' = if (openAiHost == 'azure') {
+module openAi 'core/ai/cognitiveservices.bicep' = {
   name: 'openai'
   scope: openAiResourceGroup
   params: {
@@ -207,30 +191,31 @@ module openAi 'core/ai/cognitiveservices.bicep' = if (openAiHost == 'azure') {
     }
     deployments: [
       {
-        name: chatGptDeploymentName
+        name: openAiGpt35TurboDeploymentName
         model: {
           format: 'OpenAI'
-          name: chatGptModelName
-          version: chatGptModelVersion
+          name: 'gpt-35-turbo'
+          version: '0613'
         }
         sku: {
           name: 'Standard'
-          capacity: chatGptDeploymentCapacity
+          capacity: 120
         }
       }
       {
-        name: embeddingDeploymentName
+        name: openAiGpt35Turbo16kDeploymentName
         model: {
           format: 'OpenAI'
-          name: embeddingModelName
-          version: '2'
+          name: 'gpt-35-turbo-16k'
+          version: '0613'
         }
         sku: {
           name: 'Standard'
-          capacity: embeddingDeploymentCapacity
+          capacity: 120
         }
       }
     ]
+    publicNetworkAccess: isPrivateNetworkEnabled ? 'Disabled' : 'Enabled'
   }
 }
 
@@ -253,7 +238,7 @@ module searchService 'core/search/search-services.bicep' = {
   scope: searchServiceResourceGroup
   params: {
     name: !empty(searchServiceName) ? searchServiceName : 'gptkb-${resourceToken}'
-    location: !empty(searchServiceLocation) ? searchServiceLocation : location
+    location: searchServiceResourceGroupLocation
     tags: tags
     authOptions: {
       aadOrApiKey: {
@@ -274,10 +259,8 @@ module storage 'core/storage/storage-account.bicep' = {
     name: !empty(storageAccountName) ? storageAccountName : '${abbrs.storageStorageAccounts}${resourceToken}'
     location: storageResourceGroupLocation
     tags: tags
-    allowBlobPublicAccess: false
-    publicNetworkAccess: 'Enabled'
     sku: {
-      name: storageSkuName
+      name: 'Standard_ZRS'
     }
     deleteRetentionPolicy: {
       enabled: true
@@ -289,17 +272,267 @@ module storage 'core/storage/storage-account.bicep' = {
         publicAccess: 'None'
       }
     ]
+    publicNetworkAccess: 'Enabled'
   }
 }
 
+// ================================================================================================
+// PRIVATE NETWORK VM
+// ================================================================================================
+module vm 'core/vm/vm.bicep' = {
+  name: 'vm${resourceToken}'
+  scope: resourceGroup
+  params: {
+    name: 'vm${resourceToken}'
+    location: location
+    adminUsername: vmLoginName
+    adminPasswordOrKey: vmLoginPassword
+    nicId: nic.outputs.nicId
+    isPrivateNetworkEnabled: isPrivateNetworkEnabled
+  }
+  dependsOn: [
+    nic
+  ]
+}
+
+// ================================================================================================
+// NETWORK
+// ================================================================================================
+module publicIP 'core/network/pip.bicep' = {
+  name: 'publicIP'
+  scope: resourceGroup
+  params: {
+    name: 'publicIP'
+    location: location
+    isPrivateNetworkEnabled: isPrivateNetworkEnabled
+  }
+}
+
+module nsg 'core/network/nsg.bicep' = {
+  name: 'nsg'
+  scope: resourceGroup
+  params: {
+    name: 'nsg'
+    location: location
+    isPrivateNetworkEnabled: isPrivateNetworkEnabled
+  }
+}
+
+module nic 'core/network/nic.bicep' = {
+  name: 'vm-nic'
+  scope: resourceGroup
+  params: {
+    name: 'vm-nic'
+    location: location
+    subnetId: vmSubnet.outputs.id
+    publicIPId: publicIP.outputs.publicIPId
+    nsgId: nsg.outputs.id
+    isPrivateNetworkEnabled: isPrivateNetworkEnabled
+  }
+  dependsOn: [
+    vmSubnet
+    publicIP
+    nsg
+  ]
+}
+
+module vnet 'core/network/vnet.bicep' = {
+  name: 'vnet'
+  scope: resourceGroup
+  params: {
+    name: 'vnet'
+    location: vnetLocation
+    addressPrefixes: [vnetAddressPrefix]
+    isPrivateNetworkEnabled: isPrivateNetworkEnabled
+  }
+}
+
+module privateEndpointSubnet 'core/network/subnet.bicep' = {
+  name: '${abbrs.networkVirtualNetworksSubnets}private-endpoint-${resourceToken}'
+  scope: resourceGroup
+  params: {
+    existVnetName: vnet.outputs.name
+    name: '${abbrs.networkVirtualNetworksSubnets}private-endpoint-${resourceToken}'
+    addressPrefix: subnetAddressPrefix1
+    networkSecurityGroup: {
+      id: nsg.outputs.id
+    }
+    isPrivateNetworkEnabled: isPrivateNetworkEnabled
+  }
+  dependsOn: [
+    vnet
+    nsg
+  ]
+}
+
+module vmSubnet 'core/network/subnet.bicep' = {
+  name: '${abbrs.networkVirtualNetworksSubnets}vm-${resourceToken}'
+  scope: resourceGroup
+  params: {
+    existVnetName: vnet.outputs.name
+    name: '${abbrs.networkVirtualNetworksSubnets}vm-${resourceToken}'
+    addressPrefix: subnetAddressPrefix2
+    networkSecurityGroup: {
+      id: nsg.outputs.id
+    }
+    isPrivateNetworkEnabled: isPrivateNetworkEnabled
+  }
+  dependsOn: [
+    vnet
+    nsg
+    privateEndpointSubnet
+  ]
+}
+
+module appServiceSubnet 'core/network/subnet.bicep' = {
+  name: '${abbrs.networkVirtualNetworksSubnets}${abbrs.webSitesAppService}${resourceToken}'
+  scope: resourceGroup
+  params: {
+    existVnetName: vnet.outputs.name
+    name: '${abbrs.networkVirtualNetworksSubnets}${abbrs.webSitesAppService}${resourceToken}'
+    addressPrefix: subnetAddressPrefix3
+    networkSecurityGroup: {
+      id: nsg.outputs.id
+    }
+    delegations: [
+      {
+        name: 'Microsoft.Web/serverFarms'
+        properties: {
+          serviceName: 'Microsoft.Web/serverFarms'
+        }
+      }
+    ]
+    isPrivateNetworkEnabled: isPrivateNetworkEnabled
+  }
+  dependsOn: [
+    vnet
+    nsg
+    vmSubnet
+  ]
+}
+
+// ================================================================================================
+// PRIVATE ENDPOINT
+// ================================================================================================
+module appServicePrivateEndopoint 'core/network/privateEndpoint.bicep' = {
+  name: 'app-service-private-endpoint'
+  scope: resourceGroup
+  params: {
+    location: privateEndpointLocation
+    name: backend.outputs.name
+    subnetId: privateEndpointSubnet.outputs.id
+    privateLinkServiceId: backend.outputs.id
+    privateLinkServiceGroupIds: ['sites']
+    dnsZoneName: 'azurewebsites.net'
+    linkVnetId: vnet.outputs.id
+    isPrivateNetworkEnabled: isPrivateNetworkEnabled
+  }
+  dependsOn: [
+    privateEndpointSubnet
+  ]
+}
+
+module cosmosDBPrivateEndpoint 'core/network/privateEndpoint.bicep' = {
+  name: 'cosmos-private-endpoint'
+  scope: resourceGroup
+  params: {
+    location: privateEndpointLocation
+    name: cosmosDb.outputs.name
+    subnetId: privateEndpointSubnet.outputs.id
+    privateLinkServiceId: cosmosDb.outputs.id
+    privateLinkServiceGroupIds: ['SQL']
+    dnsZoneName: 'documents.azure.com'
+    linkVnetId: vnet.outputs.id
+    isPrivateNetworkEnabled: isPrivateNetworkEnabled
+  }
+  dependsOn: [
+    privateEndpointSubnet
+  ]
+}
+
+module oepnaiPrivateEndopoint 'core/network/privateEndpoint.bicep' = {
+  name: 'openai-service-private-endpoint'
+  scope: resourceGroup
+  params: {
+    location: privateEndpointLocation
+    name: openAi.outputs.name
+    subnetId: privateEndpointSubnet.outputs.id
+    privateLinkServiceId: openAi.outputs.id
+    privateLinkServiceGroupIds: ['account']
+    dnsZoneName: 'openai.azure.com'
+    linkVnetId: vnet.outputs.id
+    isPrivateNetworkEnabled: isPrivateNetworkEnabled
+  }
+  dependsOn: [
+    privateEndpointSubnet
+  ]
+}
+
+module formRecognizerPrivateEndopoint 'core/network/privateEndpoint.bicep' = {
+  name: 'form-recognizer-private-endpoint'
+  scope: resourceGroup
+  params: {
+    location: privateEndpointLocation
+    name: formRecognizer.outputs.name
+    subnetId: privateEndpointSubnet.outputs.id
+    privateLinkServiceId: formRecognizer.outputs.id
+    privateLinkServiceGroupIds: ['account']
+    dnsZoneName: 'cognitiveservices.azure.com'
+    linkVnetId: vnet.outputs.id
+    isPrivateNetworkEnabled: isPrivateNetworkEnabled
+  }
+  dependsOn: [
+    privateEndpointSubnet
+  ]
+}
+
+
+module storagePrivateEndopoint 'core/network/privateEndpoint.bicep' = {
+  name: 'storage-private-endpoint'
+  scope: resourceGroup
+  params: {
+    location: privateEndpointLocation
+    name: storage.outputs.name
+    subnetId: privateEndpointSubnet.outputs.id
+    privateLinkServiceId: storage.outputs.id
+    privateLinkServiceGroupIds: ['Blob']
+    dnsZoneName: 'blob.core.windows.net'
+    linkVnetId: vnet.outputs.id
+    isPrivateNetworkEnabled: isPrivateNetworkEnabled
+  }
+  dependsOn: [
+    privateEndpointSubnet
+  ]
+}
+
+module searchServicePrivateEndopoint 'core/network/privateEndpoint.bicep' = {
+  name: 'search-service-private-endpoint'
+  scope: resourceGroup
+  params: {
+    location: privateEndpointLocation
+    name: searchService.outputs.name
+    subnetId: privateEndpointSubnet.outputs.id
+    privateLinkServiceId: searchService.outputs.id
+    privateLinkServiceGroupIds: ['searchService']
+    dnsZoneName: 'search.windows.net'
+    linkVnetId: vnet.outputs.id
+    isPrivateNetworkEnabled: isPrivateNetworkEnabled
+  }
+  dependsOn: [
+    privateEndpointSubnet
+  ]
+}
+
+// ================================================================================================
 // USER ROLES
-module openAiRoleUser 'core/security/role.bicep' = if (openAiHost == 'azure') {
+// ================================================================================================
+module openAiRoleUser 'core/security/role.bicep' = {
   scope: openAiResourceGroup
   name: 'openai-role-user'
   params: {
     principalId: principalId
     roleDefinitionId: '5e0bd9bd-7b93-4f28-af87-19fc36ad61bd'
-    principalType: 'User'
+    principalType: !empty(principalType) ? principalType : 'User'
   }
 }
 
@@ -309,7 +542,7 @@ module formRecognizerRoleUser 'core/security/role.bicep' = {
   params: {
     principalId: principalId
     roleDefinitionId: 'a97b65f3-24c7-4388-baec-2e87135dc908'
-    principalType: 'User'
+    principalType: !empty(principalType) ? principalType : 'User'
   }
 }
 
@@ -319,7 +552,7 @@ module storageRoleUser 'core/security/role.bicep' = {
   params: {
     principalId: principalId
     roleDefinitionId: '2a2b9908-6ea1-4ae2-8e65-a410df84e7d1'
-    principalType: 'User'
+    principalType: !empty(principalType) ? principalType : 'User'
   }
 }
 
@@ -329,7 +562,7 @@ module storageContribRoleUser 'core/security/role.bicep' = {
   params: {
     principalId: principalId
     roleDefinitionId: 'ba92f5b4-2d11-453d-a403-e96b0029c9fe'
-    principalType: 'User'
+    principalType: !empty(principalType) ? principalType : 'User'
   }
 }
 
@@ -339,7 +572,7 @@ module searchRoleUser 'core/security/role.bicep' = {
   params: {
     principalId: principalId
     roleDefinitionId: '1407120a-92aa-4202-b7e9-c0e197c71c8f'
-    principalType: 'User'
+    principalType: !empty(principalType) ? principalType : 'User'
   }
 }
 
@@ -349,22 +582,14 @@ module searchContribRoleUser 'core/security/role.bicep' = {
   params: {
     principalId: principalId
     roleDefinitionId: '8ebe5a00-799e-43f5-93ac-243d3dce84a7'
-    principalType: 'User'
+    principalType: !empty(principalType) ? principalType : 'User'
   }
 }
 
-module searchSvcContribRoleUser 'core/security/role.bicep' = {
-  scope: searchServiceResourceGroup
-  name: 'search-svccontrib-role-user'
-  params: {
-    principalId: principalId
-    roleDefinitionId: '7ca78c08-252a-4471-8644-bb5ff32d4ba0'
-    principalType: 'User'
-  }
-}
-
+// ================================================================================================
 // SYSTEM IDENTITIES
-module openAiRoleBackend 'core/security/role.bicep' = if (openAiHost == 'azure') {
+// ================================================================================================
+module openAiRoleBackend 'core/security/role.bicep' = {
   scope: openAiResourceGroup
   name: 'openai-role-backend'
   params: {
@@ -398,18 +623,13 @@ output AZURE_LOCATION string = location
 output AZURE_TENANT_ID string = tenant().tenantId
 output AZURE_RESOURCE_GROUP string = resourceGroup.name
 
-// Shared by all OpenAI deployments
-output OPENAI_HOST string = openAiHost
-output AZURE_OPENAI_EMB_MODEL_NAME string = embeddingModelName
-output AZURE_OPENAI_CHATGPT_MODEL string = chatGptModelName
-// Specific to Azure OpenAI
-output AZURE_OPENAI_SERVICE string = (openAiHost == 'azure') ? openAi.outputs.name : ''
-output AZURE_OPENAI_RESOURCE_GROUP string = (openAiHost == 'azure') ? openAiResourceGroup.name : ''
-output AZURE_OPENAI_CHATGPT_DEPLOYMENT string = (openAiHost == 'azure') ? chatGptDeploymentName : ''
-output AZURE_OPENAI_EMB_DEPLOYMENT string = (openAiHost == 'azure') ? embeddingDeploymentName : ''
-// Used only with non-Azure OpenAI deployments
-output OPENAI_API_KEY string = (openAiHost == 'openai') ? openAiApiKey : ''
-output OPENAI_ORGANIZATION string = (openAiHost == 'openai') ? openAiApiOrganization : ''
+output AZURE_OPENAI_SERVICE string = openAi.outputs.name
+output AZURE_OPENAI_RESOURCE_GROUP string = openAiResourceGroup.name
+output AZURE_OPENAI_GPT_35_TURBO_DEPLOYMENT string = openAiGpt35TurboDeploymentName
+output AZURE_OPENAI_GPT_35_TURBO_16K_DEPLOYMENT string = openAiGpt35Turbo16kDeploymentName
+output AZURE_OPENAI_GPT_4_DEPLOYMENT string = openAiGpt4DeploymentName
+output AZURE_OPENAI_GPT_4_32K_DEPLOYMENT string = openAiGpt432kDeploymentName
+output AZURE_OPENAI_API_VERSION string = openAiApiVersion
 
 output AZURE_FORMRECOGNIZER_SERVICE string = formRecognizer.outputs.name
 output AZURE_FORMRECOGNIZER_RESOURCE_GROUP string = formRecognizerResourceGroup.name
@@ -422,4 +642,12 @@ output AZURE_STORAGE_ACCOUNT string = storage.outputs.name
 output AZURE_STORAGE_CONTAINER string = storageContainerName
 output AZURE_STORAGE_RESOURCE_GROUP string = storageResourceGroup.name
 
+output AZURE_COSMOSDB_ENDPOINT string = cosmosDb.outputs.endpoint
+output AZURE_COSMOSDB_DATABASE string = cosmosDb.outputs.databaseName
+output AZURE_COSMOSDB_CONTAINER string = cosmosDb.outputs.containerName
+
+output AZURE_COSMOSDB_ACCOUNT string = cosmosDb.outputs.accountName
+output AZURE_COSMOSDB_RESOURCE_GROUP string = resourceGroup.name
+
+output BACKEND_IDENTITY_PRINCIPAL_ID string = backend.outputs.identityPrincipalId
 output BACKEND_URI string = backend.outputs.uri

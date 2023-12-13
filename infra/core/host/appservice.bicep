@@ -1,4 +1,3 @@
-metadata description = 'Creates an Azure App Service in an existing Azure App Service plan.'
 param name string
 param location string = resourceGroup().location
 param tags object = {}
@@ -8,6 +7,9 @@ param applicationInsightsName string = ''
 param appServicePlanId string
 param keyVaultName string = ''
 param managedIdentity bool = !empty(keyVaultName)
+
+@allowed(['Disabled', 'Enabled'])
+param publicNetworkAccess string = 'Enabled'
 
 // Runtime Properties
 @allowed([
@@ -24,7 +26,6 @@ param kind string = 'app,linux'
 param allowedOrigins array = []
 param alwaysOn bool = true
 param appCommandLine string = ''
-@secure()
 param appSettings object = {}
 param clientAffinityEnabled bool = false
 param enableOryxBuild bool = contains(kind, 'linux')
@@ -36,6 +37,7 @@ param scmDoBuildDuringDeployment bool = false
 param use32BitWorkerProcess bool = false
 param ftpsState string = 'FtpsOnly'
 param healthCheckPath string = ''
+param virtualNetworkSubnetId string
 
 resource appService 'Microsoft.Web/sites@2022-03-01' = {
   name: name
@@ -48,7 +50,6 @@ resource appService 'Microsoft.Web/sites@2022-03-01' = {
       linuxFxVersion: linuxFxVersion
       alwaysOn: alwaysOn
       ftpsState: ftpsState
-      minTlsVersion: '1.2'
       appCommandLine: appCommandLine
       numberOfWorkers: numberOfWorkers != -1 ? numberOfWorkers : null
       minimumElasticInstanceCount: minimumElasticInstanceCount != -1 ? minimumElasticInstanceCount : null
@@ -59,6 +60,8 @@ resource appService 'Microsoft.Web/sites@2022-03-01' = {
         allowedOrigins: union([ 'https://portal.azure.com', 'https://ms.portal.azure.com' ], allowedOrigins)
       }
     }
+    virtualNetworkSubnetId: virtualNetworkSubnetId != '' ? virtualNetworkSubnetId : null
+    publicNetworkAccess: publicNetworkAccess
     clientAffinityEnabled: clientAffinityEnabled
     httpsOnly: true
   }
@@ -72,9 +75,9 @@ resource appService 'Microsoft.Web/sites@2022-03-01' = {
         SCM_DO_BUILD_DURING_DEPLOYMENT: string(scmDoBuildDuringDeployment)
         ENABLE_ORYX_BUILD: string(enableOryxBuild)
       },
-      runtimeName == 'python' ? { PYTHON_ENABLE_GUNICORN_MULTIWORKERS: 'true'} : {},
       !empty(applicationInsightsName) ? { APPLICATIONINSIGHTS_CONNECTION_STRING: applicationInsights.properties.ConnectionString } : {},
-      !empty(keyVaultName) ? { AZURE_KEY_VAULT_ENDPOINT: keyVault.properties.vaultUri } : {})
+      !empty(keyVaultName) ? { AZURE_KEY_VAULT_ENDPOINT: keyVault.properties.vaultUri } : {}
+      )
   }
 
   resource configLogs 'config' = {
@@ -89,23 +92,9 @@ resource appService 'Microsoft.Web/sites@2022-03-01' = {
       configAppSettings
     ]
   }
-
-  resource basicPublishingCredentialsPoliciesFtp 'basicPublishingCredentialsPolicies' = {
-    name: 'ftp'
-    properties: {
-      allow: false
-    }
-  }
-
-  resource basicPublishingCredentialsPoliciesScm 'basicPublishingCredentialsPolicies' = {
-    name: 'scm'
-    properties: {
-      allow: false
-    }
-  }
 }
 
-resource keyVault 'Microsoft.KeyVault/vaults@2022-07-01' existing = if (!(empty(keyVaultName))) {
+resource keyVault 'Microsoft.KeyVault/vaults@2023-02-01' existing = if (!(empty(keyVaultName))) {
   name: keyVaultName
 }
 
@@ -113,6 +102,8 @@ resource applicationInsights 'Microsoft.Insights/components@2020-02-02' existing
   name: applicationInsightsName
 }
 
+
 output identityPrincipalId string = managedIdentity ? appService.identity.principalId : ''
 output name string = appService.name
+output id string = appService.id
 output uri string = 'https://${appService.properties.defaultHostName}'

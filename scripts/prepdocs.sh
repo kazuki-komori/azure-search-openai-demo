@@ -1,32 +1,26 @@
  #!/bin/sh
 
-. ./scripts/loadenv.sh
+echo ""
+echo "Loading azd .env file from current environment"
+echo ""
+
+while IFS='=' read -r key value; do
+    value=$(echo "$value" | sed 's/^"//' | sed 's/"$//')
+    export "$key=$value"
+done <<EOF
+$(azd env get-values)
+EOF
+
+roleId=$(az cosmosdb sql role definition create --account-name "$AZURE_COSMOSDB_ACCOUNT" --resource-group "$AZURE_COSMOSDB_RESOURCE_GROUP" --body ./scripts/cosmosreadwriterole.json --output tsv --query id)
+az cosmosdb sql role assignment create --account-name "$AZURE_COSMOSDB_ACCOUNT" --resource-group "$AZURE_COSMOSDB_RESOURCE_GROUP" --scope / --principal-id "$BACKEND_IDENTITY_PRINCIPAL_ID" --role-definition-id $roleId
+az cosmosdb sql role assignment create --account-name "$AZURE_COSMOSDB_ACCOUNT" --resource-group "$AZURE_COSMOSDB_RESOURCE_GROUP" --scope / --principal-id "$AZURE_PRINCIPAL_ID" --role-definition-id $roleId
+
+
+echo 'Creating python virtual environment "scripts/.venv"'
+python -m venv scripts/.venv
+
+echo 'Installing dependencies from "requirements.txt" into virtual environment'
+./scripts/.venv/bin/python -m pip install -r scripts/requirements.txt
 
 echo 'Running "prepdocs.py"'
-
-if [ -n "$AZURE_ADLS_GEN2_STORAGE_ACCOUNT" ]; then
-  adlsGen2StorageAccountArg="--datalakestorageaccount $AZURE_ADLS_GEN2_STORAGE_ACCOUNT"
-  adlsGen2FilesystemPathArg=""
-  if [ -n "$AZURE_ADLS_GEN2_FILESYSTEM_PATH" ]; then
-    adlsGen2FilesystemPathArg="--datalakefilesystempath $AZURE_ADLS_GEN2_FILESYSTEM_PATH"
-  fi
-  adlsGen2FilesystemArg=""
-  if [ -n "$AZURE_ADLS_GEN2_FILESYSTEM" ]; then
-    adlsGen2FilesystemArg="--datalakefilesystem $AZURE_ADLS_GEN2_FILESYSTEM"
-  fi
-  aclArg="--useacls"
-fi
-
-if [ -n "$AZURE_SEARCH_ANALYZER_NAME" ]; then
-  searchAnalyzerNameArg="--searchanalyzername $AZURE_SEARCH_ANALYZER_NAME"
-fi
-
-./scripts/.venv/bin/python ./scripts/prepdocs.py \
-'./data/*' $adlsGen2StorageAccountArg $adlsGen2FilesystemArg $adlsGen2FilesystemPathArg $searchAnalyzerNameArg \
-$aclArg  --storageaccount "$AZURE_STORAGE_ACCOUNT" \
---container "$AZURE_STORAGE_CONTAINER" --searchservice "$AZURE_SEARCH_SERVICE" \
---openaiservice "$AZURE_OPENAI_SERVICE" --openaideployment "$AZURE_OPENAI_EMB_DEPLOYMENT" \
---openaimodelname "$AZURE_OPENAI_EMB_MODEL_NAME" --index "$AZURE_SEARCH_INDEX" \
---formrecognizerservice "$AZURE_FORMRECOGNIZER_SERVICE" --openaimodelname "$AZURE_OPENAI_EMB_MODEL_NAME" \
---tenantid "$AZURE_TENANT_ID" --openaihost "$OPENAI_HOST" \
---openaikey "$OPENAI_API_KEY" -v
+./scripts/.venv/bin/python ./scripts/prepdocs.py './data/*' --storageaccount "$AZURE_STORAGE_ACCOUNT" --container "$AZURE_STORAGE_CONTAINER" --searchservice "$AZURE_SEARCH_SERVICE" --index "$AZURE_SEARCH_INDEX" --formrecognizerservice "$AZURE_FORMRECOGNIZER_SERVICE" --tenantid "$AZURE_TENANT_ID" -v

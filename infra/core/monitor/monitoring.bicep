@@ -1,14 +1,12 @@
-metadata description = 'Creates an Application Insights instance and a Log Analytics workspace.'
-param logAnalyticsName string
 param applicationInsightsName string
-param applicationInsightsDashboardName string = ''
+param workspaceName string
 param location string = resourceGroup().location
 param tags object = {}
 
-module logAnalytics 'loganalytics.bicep' = {
+module locanalytics 'loganalytics.bicep' = {
   name: 'loganalytics'
   params: {
-    name: logAnalyticsName
+    workspaceName: workspaceName
     location: location
     tags: tags
   }
@@ -20,13 +18,11 @@ module applicationInsights 'applicationinsights.bicep' = {
     name: applicationInsightsName
     location: location
     tags: tags
-    dashboardName: applicationInsightsDashboardName
-    logAnalyticsWorkspaceId: logAnalytics.outputs.id
+    workspaceId: locanalytics.outputs.wokspaceId
   }
 }
 
 output applicationInsightsConnectionString string = applicationInsights.outputs.connectionString
 output applicationInsightsInstrumentationKey string = applicationInsights.outputs.instrumentationKey
 output applicationInsightsName string = applicationInsights.outputs.name
-output logAnalyticsWorkspaceId string = logAnalytics.outputs.id
-output logAnalyticsWorkspaceName string = logAnalytics.outputs.name
+

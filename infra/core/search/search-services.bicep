@@ -1,4 +1,3 @@
-metadata description = 'Creates an Azure AI Search instance.'
 param name string
 param location string = resourceGroup().location
 param tags object = {}
@@ -8,32 +7,6 @@ param sku object = {
 }
 
 param authOptions object = {}
-param disableLocalAuth bool = false
-param disabledDataExfiltrationOptions array = []
-param encryptionWithCmk object = {
-  enforcement: 'Unspecified'
-}
-@allowed([
-  'default'
-  'highDensity'
-])
-param hostingMode string = 'default'
-param networkRuleSet object = {
-  bypass: 'None'
-  ipRules: []
-}
-param partitionCount int = 1
-@allowed([
-  'enabled'
-  'disabled'
-])
-param publicNetworkAccess string = 'enabled'
-param replicaCount int = 1
-@allowed([
-  'disabled'
-  'free'
-  'standard'
-])
 param semanticSearch string = 'disabled'
 
 resource search 'Microsoft.Search/searchServices@2021-04-01-preview' = {
@@ -45,14 +18,19 @@ resource search 'Microsoft.Search/searchServices@2021-04-01-preview' = {
   }
   properties: {
     authOptions: authOptions
-    disableLocalAuth: disableLocalAuth
-    disabledDataExfiltrationOptions: disabledDataExfiltrationOptions
-    encryptionWithCmk: encryptionWithCmk
-    hostingMode: hostingMode
-    networkRuleSet: networkRuleSet
-    partitionCount: partitionCount
-    publicNetworkAccess: publicNetworkAccess
-    replicaCount: replicaCount
+    disableLocalAuth: false
+    disabledDataExfiltrationOptions: []
+    encryptionWithCmk: {
+      enforcement: 'Unspecified'
+    }
+    hostingMode: 'default'
+    networkRuleSet: {
+      bypass: 'None'
+      ipRules: []
+    }
+    partitionCount: 1
+    publicNetworkAccess: 'Enabled'
+    replicaCount: 1
     semanticSearch: semanticSearch
   }
   sku: sku

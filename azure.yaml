@@ -1,11 +1,11 @@
 # yaml-language-server: $schema=https://raw.githubusercontent.com/Azure/azure-dev/main/schemas/v1.0/azure.yaml.json
 
-name: azure-search-openai-demo
+name: internal-document-search
 metadata:
-  template: azure-search-openai-demo@0.0.2-beta
+  template: internal-document-search@0.0.1-beta
 services:
   backend:
-    project: ./app/backend
+    project: ./src/backend
     language: py
     host: appservice
     hooks:
